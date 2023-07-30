@@ -15,13 +15,21 @@ SIGMA2 = 1627
 class ChessMLP(pl.LightningModule):
     def __init__(self):
         super().__init__()
-        self.embedding = nn.Embedding(13, 4)
-        self.fc = nn.ModuleList([nn.Linear(64 * 4 + 5, 32), nn.Linear(32, 32), nn.Linear(32, 32), nn.Linear(32, 1)])
+        self.embedding = nn.Embedding(65, 8)
+        self.fc = nn.ModuleList([nn.Linear(32 * 8 + 5, 32), nn.Linear(32, 32), nn.Linear(32, 32), nn.Linear(32, 1)])
+        # self.bn = nn.ModuleList([nn.BatchNorm1d(32) for _ in range(3)])  # Define BatchNorm layers for the hidden layers
         # self.fc = nn.ModuleList([nn.Linear(64 * 4 + 5, 512), nn.Linear(512, 512), nn.Linear(512, 512), nn.Linear(512, 1)])
 
     def forward(self, x):
         info = x[:, -5:]
-        board = x[:, :-5].reshape(-1, 64)
+        if self.training:
+            # create dropout mask for one value
+            mask = torch.bernoulli(torch.full((x.shape[0], 1), 0.95)).cuda()
+            # apply on turn
+            info[:, 0] = info[:, 0] * mask.squeeze(1)
+
+        board = x[:, :-5].reshape(-1, 32)
+
         # use an embedding layer for the board
         board = self.embedding(board)
 
@@ -31,7 +39,9 @@ class ChessMLP(pl.LightningModule):
         x = torch.cat((board, info), dim=1)
 
         for i in range(len(self.fc) - 1):
-            x = F.relu(self.fc[i](x))
+            x = self.fc[i](x)
+            # x = self.bn[i](x)  # Apply BatchNorm
+            x = F.relu(x)
         x = F.sigmoid(self.fc[-1](x))
         return x * 2 - 1
 
@@ -60,7 +70,7 @@ class ChessMLP(pl.LightningModule):
         self.log('val_loss', loss, on_epoch=True)
     
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=0.01)
+        optimizer = torch.optim.Adam(self.parameters(), lr=0.001)
         return optimizer
 
 def bitboard_to_array(bb: int) -> np.ndarray:
@@ -69,34 +79,62 @@ def bitboard_to_array(bb: int) -> np.ndarray:
     b = np.unpackbits(b, bitorder="little")
     return b.reshape(64)
 
-piece_dict = {
-    None: 0,
-    chess.Piece.from_symbol('P'): 1,
-    chess.Piece.from_symbol('N'): 2,
-    chess.Piece.from_symbol('B'): 3,
-    chess.Piece.from_symbol('R'): 4,
-    chess.Piece.from_symbol('Q'): 5,
-    chess.Piece.from_symbol('K'): 6,
-    chess.Piece.from_symbol('p'): 7,
-    chess.Piece.from_symbol('n'): 8,
-    chess.Piece.from_symbol('b'): 9,
-    chess.Piece.from_symbol('r'): 10,
-    chess.Piece.from_symbol('q'): 11,
-    chess.Piece.from_symbol('k'): 12
-}
+class PieceTracker:
+    def __init__(self):
+        self.piece_order = [
+            chess.Piece.from_symbol('P'),  # white pawns
+            chess.Piece.from_symbol('N'),  # white knights
+            chess.Piece.from_symbol('B'),  # white bishops
+            chess.Piece.from_symbol('R'),  # white rooks
+            chess.Piece.from_symbol('Q'),  # white queen
+            chess.Piece.from_symbol('K'),  # white king
+            chess.Piece.from_symbol('p'),  # black pawns
+            chess.Piece.from_symbol('n'),  # black knights
+            chess.Piece.from_symbol('b'),  # black bishops
+            chess.Piece.from_symbol('r'),  # black rooks
+            chess.Piece.from_symbol('q'),  # black queen
+            chess.Piece.from_symbol('k')   # black king
+        ]
+
+        self.piece_counts = {piece: 0 for piece in self.piece_order}
+
+        self.piece_max_counts = {
+            chess.Piece.from_symbol('P'): 8, chess.Piece.from_symbol('N'): 2,
+            chess.Piece.from_symbol('B'): 2, chess.Piece.from_symbol('R'): 2,
+            chess.Piece.from_symbol('Q'): 1, chess.Piece.from_symbol('K'): 1,
+            chess.Piece.from_symbol('p'): 8, chess.Piece.from_symbol('n'): 2,
+            chess.Piece.from_symbol('b'): 2, chess.Piece.from_symbol('r'): 2,
+            chess.Piece.from_symbol('q'): 1, chess.Piece.from_symbol('k'): 1
+        }
+
+    def update_count(self, piece):
+        if piece in self.piece_counts:
+            self.piece_counts[piece] += 1
+
+    def get_position(self, piece):
+        piece_index = self.piece_order.index(piece)
+        position = sum(self.piece_max_counts[p] for p in self.piece_order[:piece_index]) + self.piece_counts[piece]
+        return position - 1  # -1 since indexing starts from 0
+
 
 def transform(fen):
     board = chess.Board(fen)
-    board_state_copy = np.zeros(64 + 5, dtype=int)
+    tracker = PieceTracker()
+    board_state_copy = np.full(32 + 5, 64, dtype=int)
+    
     for i in range(64):
         piece = board.piece_at(i)
-        board_state_copy[i] = piece_dict[piece]
+        if piece is not None:
+            if tracker.piece_counts[piece] < tracker.piece_max_counts[piece]:
+                tracker.update_count(piece)
+                position = tracker.get_position(piece)
+                board_state_copy[position] = i
 
-    board_state_copy[64] = board.turn
-    board_state_copy[64 + 1] = board.has_kingside_castling_rights(chess.WHITE)
-    board_state_copy[64 + 2] = board.has_queenside_castling_rights(chess.WHITE)
-    board_state_copy[64 + 3] = board.has_kingside_castling_rights(chess.BLACK)
-    board_state_copy[64 + 4] = board.has_queenside_castling_rights(chess.BLACK)
+    board_state_copy[32] = int(board.turn)
+    board_state_copy[32 + 1] = int(board.has_kingside_castling_rights(chess.WHITE))
+    board_state_copy[32 + 2] = int(board.has_queenside_castling_rights(chess.WHITE))
+    board_state_copy[32 + 3] = int(board.has_kingside_castling_rights(chess.BLACK))
+    board_state_copy[32 + 4] = int(board.has_queenside_castling_rights(chess.BLACK))
 
     return board_state_copy
     
@@ -105,8 +143,8 @@ class ChessDataset(Dataset):
         data = pd.read_parquet(csv_file)
         # self.data["Evaluation"] = pd.to_numeric(self.data["Evaluation"], errors="coerce").dropna()
         # self.data["Evaluation"] = self.data["Evaluation"] / SIGMA2 # 2 sigma
-        # # cap values at -5 and 5
-        # self.data["Evaluation"] = self.data["Evaluation"].clip(-1, 1).dropna()
+
+        # self.data["Evaluation"] = self.data["Evaluation"].clip(-1, 1)
 
         self.fens = data.iloc[:, 0].values
         self.evaluations = data.iloc[:, 1].values
@@ -141,10 +179,10 @@ if __name__ == "__main__":
 
     # # convert to dataloaders
     # train_dataset = data_utils.TensorDataset(train_x, train_y)
-    train_dataloader = data_utils.DataLoader(ChessDataset("data/chess_evals", transform), batch_size=2048, shuffle=True)
+    train_dataloader = data_utils.DataLoader(ChessDataset("data/chess_evals", transform), batch_size=4096, shuffle=True)
     # val_dataset = data_utils.TensorDataset(test_x, test_y)
-    val_dataloader = data_utils.DataLoader(ChessDataset("data/chess_evals", transform, True), batch_size=2048)
+    val_dataloader = data_utils.DataLoader(ChessDataset("data/chess_evals", transform, True), batch_size=4096)
     
     model = ChessMLP()
-    trainer = pl.Trainer(accelerator="gpu", devices = 1,  max_epochs=1, max_steps = 1_000_000, check_val_every_n_epoch = None, val_check_interval = 500)  # set number of epochs
+    trainer = pl.Trainer(accelerator="gpu", devices = 1,  max_epochs=4, max_steps = 4_000_000, check_val_every_n_epoch = None, val_check_interval = 500)  # set number of epochs
     trainer.fit(model, train_dataloader, val_dataloader)

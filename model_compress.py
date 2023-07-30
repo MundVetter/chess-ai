@@ -38,35 +38,27 @@ def cycle_test():
 if __name__ == "__main__":
     cycle_test()
     quants = torch.load("data/quants.pt")
-    shapes = []
-    variables = []
-    for quant in quants:
-        var = ""
-        for num in quant[0].flatten():
-            var += encode_int8_to_base64(num)
-            # var += str(int(num))
-        shapes.append(quant[0].shape)
-        variables.append(var)
 
     
-    # C# code parts
- # C# code parts
+  # C# code parts
     csharp_code = []
 
     # Define the weights and biases arrays in C#
     num_weights_and_biases = (len(quants) - 1) // 2
+    # remove last bias
+    quants = quants[:-1]
     csharp_code.append(f'fc_weights = new double[{num_weights_and_biases}][][];')
     csharp_code.append(f'fc_biases = new double[{num_weights_and_biases}][];')
 
     for i, quant in enumerate(quants):
         var = ""
         for num in quant[0].flatten():
-            var += encode_int8_to_base64(num)
+            var += encode_int8_to_base64(int(num))
 
         # Split the var string into multiple strings if its length exceeds 510
         var_parts = textwrap.wrap(var, 500)  # Less than 510 to accommodate prefix and suffix
 
-            # variable type prefix, e.g., "e_" for embeddings, "w1_", "b1_", etc. for weights/biases
+        # variable type prefix, e.g., "e_" for embeddings, "w1_", "b1_", etc. for weights/biases
         prefix = 'e0_' if i == 0 else f'w{i}_' if i % 2 == 1 else f'b{i}_'
 
         # Generate the C# variable declaration
@@ -74,23 +66,19 @@ if __name__ == "__main__":
         csharp_code.append(csharp_var_decls)
 
         # Generate the C# code to load the parameters
+        var_parts_string = 'new string[] {' + ', '.join(f'nameof({prefix}{var_part})' for var_part in var_parts) + '}'
+
         if i == 0:
-            csharp_load_params = f'embedding = LoadParams(new string[] {{'
+            csharp_load_params = f'embedding = LoadParams({var_parts_string}, '
             shape_string = f'{quants[i][0].shape[0]}, {quants[i][0].shape[1]}'
         elif i % 2 == 1:
-            csharp_load_params = f'fc_weights[{(i-1)//2}] = LoadParams(new string[] {{'
+            csharp_load_params = f'fc_weights[{(i-1)//2}] = LoadParams({var_parts_string}, '
             shape_string = f'{quants[i][0].shape[0]}, {quants[i][0].shape[1]}'
         else:
-            csharp_load_params = f'fc_biases[{(i-1)//2}] = LoadParams(new string[] {{'
+            csharp_load_params = f'fc_biases[{(i-1)//2}] = LoadParams({var_parts_string}, '
             shape_string = f'{quants[i][0].shape[0]}'
-            # shape_string = f'{quants[i][0].shape[0]}, {quants[i][0].shape[1]}'
 
-        for j in range(len(var_parts)):
-            prefix = 'e_' if i == 0 else f'w{i}_' if i % 2 == 1 else f'b{i}_'
-            csharp_load_params += f'nameof({prefix}{var_parts[j]}), '
-
-        csharp_load_params = csharp_load_params.rstrip(', ')
-        csharp_load_params += f'}}, {shape_string}, {int(quants[i][1])}, {quants[i][2]});'
+        csharp_load_params += f'{shape_string}, {int(quants[i][1])}, {quants[i][2]});'
         csharp_code.append(csharp_load_params)
 
     # Write the generated C# code to a file
