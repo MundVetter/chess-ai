@@ -1,5 +1,5 @@
 import lightning as pl
-from train import ChessMLP, ChessDataset, transform
+from train_old import ChessMLP, ChessDataset, transform
 import torch.utils.data as data_utils
 import torch
 import chess
@@ -28,9 +28,9 @@ def dequant(x, zeropoint, scale):
 
 if __name__ == "__main__":
     FENs = ["rnbqkbnr/1pp1pppp/p7/3p4/3P4/3Q4/PPP1PPPP/RNB1KBNR w KQkq - 0 3", "rnbqkbnr/1pp1pppp/p7/3p4/3P4/7Q/PPP1PPPP/RNB1KBNR b KQkq - 1 3", "rn1qkbnr/1pp1pppp/p7/3p4/3P4/7b/PPP1PPPP/RNB1KBNR w KQkq - 0 4", "rn1qkbnr/1pp1pppp/p7/3p4/3P4/7P/PPP1PP1P/RNB1KBNR b KQkq - 0 4", "r2qkbnr/1pp1pppp/p1n5/3p4/3P4/7P/PPP1PP1P/RNB1KBNR w KQkq - 1 5", "r2qkbnr/1pp1pppp/p1n5/3p4/3P4/P6P/1PP1PP1P/RNB1KBNR b KQkq - 0 5", "r2qkbnr/1pp1pppp/p1n5/3p4/3P4/P6P/1PP1PP1P/RNB1KBNR w KQkq - 0 5"]
-    # FENs = []
+    FENs = []
 
-    model = ChessMLP.load_from_checkpoint("lightning_logs/version_58/checkpoints/epoch=0-step=3000.ckpt")
+    model = ChessMLP.load_from_checkpoint("lightning_logs/version_45/checkpoints/epoch=3-step=15000.ckpt")
     model.eval()
     model.freeze()
     quants = []

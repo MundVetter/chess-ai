@@ -48,7 +48,7 @@ if __name__ == "__main__":
     # remove last bias
     quants = quants[:-1]
     csharp_code.append(f'fc_weights = new double[{num_weights_and_biases}][][];')
-    csharp_code.append(f'fc_biases = new double[{num_weights_and_biases}][];')
+    csharp_code.append(f'fc_biases = new double[{num_weights_and_biases}][][];')
 
     for i, quant in enumerate(quants):
         var = ""
@@ -76,7 +76,7 @@ if __name__ == "__main__":
             shape_string = f'{quants[i][0].shape[0]}, {quants[i][0].shape[1]}'
         else:
             csharp_load_params = f'fc_biases[{(i-1)//2}] = LoadParams({var_parts_string}, '
-            shape_string = f'{quants[i][0].shape[0]}'
+            shape_string = f'{quants[i][0].shape[0]}, 1'
 
         csharp_load_params += f'{shape_string}, {int(quants[i][1])}, {quants[i][2]});'
         csharp_code.append(csharp_load_params)

@@ -16,12 +16,22 @@ class ChessMLP(pl.LightningModule):
     def __init__(self):
         super().__init__()
         self.embedding = nn.Embedding(13, 4)
-        self.fc = nn.ModuleList([nn.Linear(64 * 4 + 5, 32), nn.Linear(32, 32), nn.Linear(32, 32), nn.Linear(32, 1)])
+        self.fc = nn.ModuleList([nn.Linear(64 * 4 + 5, 32), nn.Linear(32, 32), nn.Linear(32, 1)])
         # self.fc = nn.ModuleList([nn.Linear(64 * 4 + 5, 512), nn.Linear(512, 512), nn.Linear(512, 512), nn.Linear(512, 1)])
 
     def forward(self, x):
         info = x[:, -5:]
+        if self.training:
+            # create dropout mask for one value
+            mask = torch.bernoulli(torch.full((x.shape[0], 1), 0.95)).cuda()
+            # apply on turn
+            info[:, 0] = info[:, 0] * mask.squeeze(1)
         board = x[:, :-5].reshape(-1, 64)
+        # if self.training:
+        #     # create dropout mask for one value
+        #     mask = torch.bernoulli(torch.full((x.shape[0], 1), 0.95)).cuda()
+        #     # apply on turn
+        #     info[:, 0] = info[:, 0] * mask.squeeze(1)
         # use an embedding layer for the board
         board = self.embedding(board)
 
@@ -32,8 +42,7 @@ class ChessMLP(pl.LightningModule):
 
         for i in range(len(self.fc) - 1):
             x = F.relu(self.fc[i](x))
-        x = F.sigmoid(self.fc[-1](x))
-        return x * 2 - 1
+        return F.sigmoid(self.fc[-1](x)) * 2 - 1
 
     def training_step(self, batch, batch_idx):
         x, y = batch
@@ -60,7 +69,7 @@ class ChessMLP(pl.LightningModule):
         self.log('val_loss', loss, on_epoch=True)
     
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=0.01)
+        optimizer = torch.optim.Adam(self.parameters(), lr=0.001)
         return optimizer
 
 def bitboard_to_array(bb: int) -> np.ndarray:
@@ -92,7 +101,7 @@ def transform(fen):
         piece = board.piece_at(i)
         board_state_copy[i] = piece_dict[piece]
 
-    board_state_copy[64] = board.turn
+    board_state_copy[64] = 1 if board.turn else -1
     board_state_copy[64 + 1] = board.has_kingside_castling_rights(chess.WHITE)
     board_state_copy[64 + 2] = board.has_queenside_castling_rights(chess.WHITE)
     board_state_copy[64 + 3] = board.has_kingside_castling_rights(chess.BLACK)
@@ -141,10 +150,10 @@ if __name__ == "__main__":
 
     # # convert to dataloaders
     # train_dataset = data_utils.TensorDataset(train_x, train_y)
-    train_dataloader = data_utils.DataLoader(ChessDataset("data/chess_evals", transform), batch_size=2048, shuffle=True)
+    train_dataloader = data_utils.DataLoader(ChessDataset("data/chess_inter", transform), batch_size=2048, shuffle=True)
     # val_dataset = data_utils.TensorDataset(test_x, test_y)
     val_dataloader = data_utils.DataLoader(ChessDataset("data/chess_evals", transform, True), batch_size=2048)
     
     model = ChessMLP()
-    trainer = pl.Trainer(accelerator="gpu", devices = 1,  max_epochs=1, max_steps = 1_000_000, check_val_every_n_epoch = None, val_check_interval = 500)  # set number of epochs
-    trainer.fit(model, train_dataloader, val_dataloader)
+    trainer = pl.Trainer(accelerator="gpu", devices = 1,  max_epochs=3, max_steps = 1_000_000, check_val_every_n_epoch = None, val_check_interval = 500)  # set number of epochs
+    trainer.fit(model, train_dataloader, val_dataloader, ckpt_path="lightning_logs/version_63/checkpoints/epoch=0-step=6000.ckpt")
