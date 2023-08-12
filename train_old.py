@@ -12,14 +12,62 @@ import chess
 
 SIGMA2 = 1627
 
+import math
+import torch
+from torch import nn
+
+class SineLayer(nn.Module):
+    def __init__(self, in_dim, out_dim, bias=True, is_first=False, w0=1.0):
+        super().__init__()
+        self.in_dim = in_dim
+        self.linear = nn.Linear(in_dim, out_dim, bias=bias)
+        self.is_first = is_first
+        self.w0 = w0
+
+        # Compute standard deviation
+        self.w_std = (1 / in_dim) if is_first else (math.sqrt(1.0 / in_dim) / w0)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        # Initialize weights
+        self.linear.weight.data.uniform_(-self.w_std, self.w_std)
+
+    def forward(self, input):
+        return torch.sin(self.w0 * self.linear(input))
+
+class SineMLP(nn.Module):
+    def __init__(self, layer_dims, w0=1.0, max_dim = None):
+        super().__init__()
+        layers = []
+        if max_dim is None:
+            # to device
+            max_dim = torch.tensor([32, 32])
+        else:
+            self.max_dim = max_dim
+
+        num_layers = len(layer_dims)
+        for i in range(num_layers - 1):
+            in_dim = layer_dims[i]
+            out_dim = layer_dims[i + 1]
+            is_first = i == 0
+            layers.append(SineLayer(in_dim, out_dim, is_first=is_first, w0=w0))
+            
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, x):
+        return self.net(x / self.max_dim)
+
 class ChessMLP(pl.LightningModule):
     def __init__(self):
         super().__init__()
         self.embedding = nn.Embedding(13, 4)
         self.fc = nn.ModuleList([nn.Linear(64 * 4 + 5, 32), nn.Linear(32, 32), nn.Linear(32, 1)])
+        self.SIREN = SineMLP([2, 32, 32, 1], max_dim=torch.tensor([64 * 4 + 5, 32]))
         # self.fc = nn.ModuleList([nn.Linear(64 * 4 + 5, 512), nn.Linear(512, 512), nn.Linear(512, 512), nn.Linear(512, 1)])
 
     def forward(self, x):
+        # first generate the network    
+
         info = x[:, -5:]
         if self.training:
             # create dropout mask for one value
@@ -150,10 +198,10 @@ if __name__ == "__main__":
 
     # # convert to dataloaders
     # train_dataset = data_utils.TensorDataset(train_x, train_y)
-    train_dataloader = data_utils.DataLoader(ChessDataset("data/chess_inter", transform), batch_size=2048, shuffle=True)
+    train_dataloader = data_utils.DataLoader(ChessDataset("data/chess_evals", transform), batch_size=2048, shuffle=True)
     # val_dataset = data_utils.TensorDataset(test_x, test_y)
     val_dataloader = data_utils.DataLoader(ChessDataset("data/chess_evals", transform, True), batch_size=2048)
     
     model = ChessMLP()
     trainer = pl.Trainer(accelerator="gpu", devices = 1,  max_epochs=3, max_steps = 1_000_000, check_val_every_n_epoch = None, val_check_interval = 500)  # set number of epochs
-    trainer.fit(model, train_dataloader, val_dataloader, ckpt_path="lightning_logs/version_63/checkpoints/epoch=0-step=6000.ckpt")
+    trainer.fit(model, train_dataloader, val_dataloader)
